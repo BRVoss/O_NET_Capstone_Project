@@ -1,0 +1,903 @@
+---
+title: "Capstone-O*NET"
+author: "Bethany Voss"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    toc: true
+  html_document:
+    toc: true
+    theme: journal
+---
+
+# Introduction
+For those looking for a job, looking to hire an employee, or looking to advance in their current role, having a good understanding of all aspects of an occupation is important. Through things like job analysis industrial-organizational researchers are able to quantify aspects of occupations to help others know necessary information on what is needed to perform well. These include things like abilities, skills, and job taxonomies. 
+
+One large organization that compiles job information for public use is the United States Department of Labor. The Occupational Information Network (O * NET) program has been collecting data from industry experts and actual workers in order to gain insights to help both employers and potential employees understand the skills and characteristics needed for specific jobs. This data can help students explore jobs they might like, help hiring managers write better hiring ads, and help employees find beneficial skills to advance their career. The project partners with various research organizations in order to scientifically gather data and create up-to-date measures. According to the O * NET resource center website, they have gathered data on over 900 different occupation profiles (National Center for O * NET Development, 2026). Beyond the occupational data, the O * NET website also has other tools like the career exploration tools, and toolkits for business.
+
+One measure within the O * NET data is for work styles. According to the project work styles are personality tendencies exhibited at work that can affect how well someone performs a job (Putka et al., 2024, p. 25). The measure contains 21 different personality traits that research has shown has a bearing on job performance. For example, the measure contains traits like dependability, integrity, adaptability, and cooperation. In creating this scale, researchers asked subject matter experts to rate if these 21 traits were beneficial or detrimental to have in jobs in their field using a scoring system ranging from -3 to +3 (Putka et al., 2024 p. 31). If the average score for a work style is positive (between .01 and 3) there is some amount of benefit to possessing that trait. A score of exactly 0 would mean no impact of that trait on job performance. If the average score for a work style is negative (between -.01 and -3) there is some amount of disadvantage to possessing that trait. Some traits are actually a bad thing to have in specific jobs. For example, the role 'Air Traffic Controllers' (row 848) has an innovation score of -.68. Air Traffic Controllers should be focused on safety and following procedures correctly, and being innovative at the job may have safety risks. 
+
+For this project, I made a series of machine learning models to predict if a job was rated high or low on a particular work style. I selected three different work styles to test: innovation, attention to detail, and stress tolerance. For each of the work style outcomes, three different machine learning models were created in order to compare and contrast model types for this data. The model kinds selected were generalized linear model, lasso regression model, and a k-nearest neighbors model. I was also interested in potential differences in model accuracy depending on what was included in the dataset. To explore this I made each of these models for two different datasets. One dataset contained only the data from the work styles measure. The second dataset included other O * Net measures. This larger dataset included work styles, abilities, essential skills, transferable skills, and knowledge measures. In total, this project will look at the accuracy of 18 different models to determine what method is most useful when predicting each of these three work styles. 
+
+# Analysis
+### Setup and Reformatting
+I started by setting up all needed packages in R, which included tidyverse, caret, readxl, dplyr, glmnet, GGally, and ggrepel. Then I downloaded all relevant dataset files  from the O * Net website: https://www.onetcenter.org/database.html#tabular (National Center for O * NET Development, 2026).
+```{r}
+if(!require(tidyverse)) install.packages("tidyverse")
+if(!require(caret)) install.packages("caret")
+if(!require(readxl)) install.packages("readxl")
+if(!require(dplyr)) install.packages("dplyr")
+if(!require(glmnet)) install.packages("glmnet")
+if(!require(GGally)) install.packages("GGally")
+if(!require(ggrepel)) install.packages("ggrepel")
+
+library(tidyverse)
+library(caret)
+library(readxl)
+library(dplyr)
+library(glmnet)
+library(GGally)
+library(ggrepel)
+
+###O*NET data files from https://www.onetcenter.org/database.html#tabular
+```
+Next, the data needed to be transferred into R and reformatted to be usable. The O * Net data contained information that was redundant or strictly informational and would have no predictive value. The full data was paired down and adapted to contain only job titles and the values from the elements within that measure. This was done for each of the five O * Net measures that were combined. 
+```{r}
+work_styles<-read_xlsx("Work Styles.xlsx")
+work_styles<-work_styles %>% filter(`Scale ID`=="WI")
+work_styles<-work_styles %>% select(c(Title, `Element Name`, `Data Value`))
+work_styles<-work_styles %>% rename(`Work Style Value`=`Data Value`, `Work Style Element`=`Element Name`)
+work_styles<-work_styles %>% pivot_wider(names_from = `Work Style Element`, values_from = `Work Style Value`)
+
+abilities<-read_xlsx("Abilities.xlsx")
+abilities<-abilities %>% filter(`Scale ID`=="IM")
+abilities<-abilities %>% select(c(Title, `Element Name`, `Data Value`))
+abilities<-abilities %>% rename(`Ability Element`=`Element Name`, `Ability Value`=`Data Value` )
+abilities<-abilities %>% pivot_wider(names_from = `Ability Element`, values_from = `Ability Value`)
+
+essential_skills<-read_xlsx("Essential Skills.xlsx")
+essential_skills<-essential_skills %>% filter(`Scale ID`=="IM")
+essential_skills<-essential_skills %>% select(c(Title, `Element Name`, `Data Value`))
+essential_skills<-essential_skills %>% rename(`Essential Skills Element`= `Element Name`, `Essential Skills Value`=`Data Value`)
+essential_skills<-essential_skills %>% pivot_wider(names_from = `Essential Skills Element`, values_from = `Essential Skills Value`)
+
+knowledge<-read_xlsx("Knowledge.xlsx")
+knowledge<-knowledge %>% filter(`Scale ID`=="IM")
+knowledge<-knowledge %>%  select(c(Title, `Element Name`, `Data Value`))
+knowledge<-knowledge %>% rename(`Knowledge Element`=`Element Name`, `Knowledge Value`=`Data Value`)
+knowledge<-knowledge %>% pivot_wider(names_from = `Knowledge Element`, values_from = `Knowledge Value`)
+
+transferable_skills<-read_xlsx("Transferable Skills.xlsx")
+transferable_skills<-transferable_skills %>% filter(`Scale ID`=="IM")
+transferable_skills<-transferable_skills %>% select(c(Title, `Element Name`, `Data Value`))
+transferable_skills<-transferable_skills %>% rename(`Transferable Skills Element`=`Element Name`, `Transferable Value`=`Data Value`)
+transferable_skills<-transferable_skills %>% pivot_wider(names_from = `Transferable Skills Element`, values_from = `Transferable Value`)
+
+```
+The refined measures were then combined using `inner_join()` by job title. This ensured that only job titles that were in all measures would be included in this combined dataset.
+```{r}
+o_net_data<-work_styles%>%
+  inner_join(abilities, by= "Title")%>%
+  inner_join(essential_skills, by="Title")%>%
+  inner_join(knowledge, by="Title")%>%
+  inner_join(transferable_skills, by="Title")
+```
+This project predicted if a job is considered high or low in each of of the three selected work styles. In theory, one way to go about delineating binomial categorization would be using the 0 in the scale: negative values would be considered low, and positive values would be considered high. This method would not take into account the distribution of values for our individual work styles. For instance, both attention to detail and stress tolerance have no negative values. Instead, I had the binomial split be the average of the individual work styles. This way it is what would be considered low or high within each group. The `mutate()` function was used to add columns containing the binomial categorization for each work style outcome, labeled as 'Innovation Variable', 'Attention to Detail Variable', and 'Stress Tolerance Variable'.
+```{r}
+#Create binomial with outcome means
+o_net_data<-o_net_data%>%
+  mutate(`Innovation Variable`= ifelse(Innovation>=mean(Innovation),1,0),
+         `Attention to Detail Variable`= ifelse(`Attention to Detail`>=mean(`Attention to Detail`),1,0),
+         `Stress Tolerance Variable`= ifelse(`Stress Tolerance`>=mean(`Stress Tolerance`),1,0))
+
+```
+### Innovation Models
+According to O * Net, innovation is categorized as "a tendency to be inventive, imaginative, and adopt new perspectives on ways to accomplish work" (Putka et al., 2024, p. 26). Out of the three selected work style outcomes, innovation has the greatest range of values with the highest score being 3 (for 'Poets, Lyricists and Creative Writers, 'Fine Artists', and 'Video Game Designers) and the lowest being -.95 (for 'Amusement and Recreation Attendants'). 
+
+Before the models could be created, the data needed to be divided into training sets and testing sets. The training sets were used to create and train the models, and the test sets were kept as independent holdouts so they could be used as a final test of model performance. In order to get the same split every time the code is run, the function `set.seed()` was used. The function `createDataPartition()` from the Caret package was used to divide the data into 80% for training, and 20% for testing, labeled 'train_set_all_innovation' and 'test_set_all_innovation' respectively.  
+```{r}
+###INNOVATION MODELS###
+#Split Data Into Test and Train Sets
+set.seed(1888)
+
+train_index_innovation <- createDataPartition(o_net_data$`Innovation Variable`, p = 0.8, list = FALSE)
+
+train_set_all_innovation<-o_net_data[train_index_innovation,]
+test_set_all_innovation<-o_net_data[-train_index_innovation,]
+```
+While the 'Title' column is helpful when looking at the dataset, it is not needed in model training and was removed. I also removed the 'Innovation' column as it's what the predictor 'Innovation Variable' is based on. Similarly, the two columns containing the binomial categorization columns for the other two work style outcomes ('Attention to Detail Variable' and 'Stress Tolerance Variable') were removed, as it would be redundant with the corresponding 'Attention to Detail' and 'Stress Tolerance' columns. 
+```{r}
+train_set_all_innovation<-train_set_all_innovation%>%
+  select(c(-Title,-Innovation, -`Attention to Detail Variable`, -`Stress Tolerance Variable`))
+test_set_all_innovation<-test_set_all_innovation%>%
+  select(c(-Title, -Innovation, -`Attention to Detail Variable`, -`Stress Tolerance Variable`))
+```
+This constituted the first dataset that contained all variables. To create the second data set of only the work styles data, I took our test and train sets and selected only the columns from the work style dataset using the `select()` function. The altered data sets were labled 'train_set_work_styles_innovation', and 'test_set_work_styles_innovation'. By making the work style dataset this way, both datasets have the same data partition split, and can be better compared. 
+```{r}
+train_set_work_styles_innovation<-train_set_all_innovation%>%
+  select(c(`Achievement Orientation`, `Intellectual Curiosity`, `Tolerance for Ambiguity`, Initiative, Adaptability, `Self-Confidence`, Perseverance, `Leadership Orientation`, Humility, Sincerity, Empathy, Cooperation, Optimism, `Social Orientation`, Cautiousness, `Attention to Detail`, Dependability, Integrity, `Stress Tolerance`, `Self-Control`, `Innovation Variable`))
+test_set_work_styles_innovation<-test_set_all_innovation%>%
+  select(c(`Achievement Orientation`, `Intellectual Curiosity`, `Tolerance for Ambiguity`, Initiative, Adaptability, `Self-Confidence`, Perseverance, `Leadership Orientation`, Humility, Sincerity, Empathy, Cooperation, Optimism, `Social Orientation`, Cautiousness, `Attention to Detail`, Dependability, Integrity, `Stress Tolerance`, `Self-Control`, `Innovation Variable`))
+
+```
+Finally, in order for the models to be compatible with the R packages, the 'Innovation Variable' binomial column for all four test/train sets were changed from the 1/0 binomial to having labels of "High" and "Low".
+```{r}
+train_set_all_innovation <- train_set_all_innovation %>%
+  mutate(`Innovation Variable` = factor(`Innovation Variable`, labels = c("High", "Low")))
+test_set_all_innovation <- test_set_all_innovation %>%
+  mutate(`Innovation Variable` = factor(`Innovation Variable`, labels = c("High", "Low")))
+
+train_set_work_styles_innovation <- train_set_work_styles_innovation %>%
+  mutate(`Innovation Variable` = factor(`Innovation Variable`, labels = c("High", "Low")))
+test_set_work_styles_innovation <- test_set_work_styles_innovation %>%
+  mutate(`Innovation Variable` = factor(`Innovation Variable`, labels = c("High", "Low")))
+```
+The models within each work style outcome is grouped by the type of model used, starting with generalized linear model (glm), then lasso regression (glmnet), and finally k-Nearest Neighbors (kNN). Before each model, the function `set.seed()` was needed in order to get the same outcome when rerun. 
+
+For each model a 10 fold cross validation was incorporated. This is a way to select the best tuning hyperparameters without over fitting the model or using our final testing set. The training data was randomly divided into 10 equal sections. For each iteration, 9 sections were used for training and the remaining section was used for validation. This process is repeated 10 times so that every section is used as the validation set once. The hyperparameter combination that resulted in the lowest prediction error was selected and used for the full training model. 
+
+Also within each model, the family is specified as "binomial" so that the model knows that our predicted data is binomial instead of a continuous value. 
+
+#### GLM All Data model
+The first model is predicting the innovation variable binomial of the full dataset using the generalized linear model (glm). The `train()` function from the Caret package was used to create the model, with the method specified as "glm".
+```{r}
+#All Data glm
+set.seed(1888)
+innovation_glm_all_model<-train(`Innovation Variable` ~ .,
+                                data= train_set_all_innovation,
+                                method= "glm",
+                                family= "binomial",
+                                preProcess= c("center", "scale"),
+                                trControl=trainControl(
+                                  method= "cv",
+                                  number= 10
+                                ))
+```
+To see how well the model functions, a confusion matrix was calculated. The confusion matrix takes the models predictions for the holdout test set and compares it to the actual values in the holdout test set. The `confusionMatrix()` function from the Caret package calculates multiple different performance metrics including accuracy (the overall proportion of correctly predicted cases), sensitivity (the proportion of correctly identified positive cases), and specificity (the proportion of correctly identifies negative cases). When running this model, the accuracy is .8953, the sensitivity is .9125, and the specificity is .8804.
+```{r}
+i_glm_all<-confusionMatrix(predict(innovation_glm_all_model, test_set_all_innovation, type="raw"),
+                test_set_all_innovation$`Innovation Variable`)
+
+i_glm_all
+```
+
+#### GLM Work Styles Data Model
+The next model is predicting the innovation variable binomial of the work styles dataset using the generalized linear model (glm). Like the previous model, the `train()` function from the Caret package was used to create the model, with the method specified as "glm".
+```{r}
+set.seed(1888)
+innovation_glm_ws_model<-train(`Innovation Variable` ~ .,
+                               data= train_set_work_styles_innovation,
+                               method= "glm",
+                               family= "binomial",
+                               preProcess= c("center", "scale"),
+                               trControl=trainControl(
+                                 method= "cv",
+                                 number= 10
+                               ))
+```
+After the confusion matrix has been ran, the accuracy of the model is .936, the sensitivity is .975, and the specificity is .9022.
+```{r}
+i_glm_ws<-confusionMatrix(predict(innovation_glm_ws_model, test_set_work_styles_innovation, type="raw"),
+                test_set_work_styles_innovation$`Innovation Variable`)
+
+i_glm_ws
+```
+
+#### Lasso All Data Model
+The second model type I looked at was a lasso (least absolute shrinkage and selection operator) model, also known as L1 regularization. Lasso is a regularized regression method that both adds a penalty to prevent model overfitting and performs feature selection by discarding irrelevant variables. 
+
+The Caret package does not automatically include this model, but it can be accessed by downloading the `glmnet` package. Within the tuning section of the model, "alpha=1" is added to indicate a lasso model type, and lambda is specified as a sequence in order to optimize the lambda value for regularization.  
+```{r}
+#All Data glmnet
+set.seed(1888)
+innovation_glmnet_all_model<-train(`Innovation Variable` ~ .,
+                                   data= train_set_all_innovation,
+                                   method= "glmnet",
+                                   family= "binomial",
+                                   preProcess= c("center", "scale"),
+                                   tuneGrid= expand.grid(
+                                     alpha=1,
+                                     lambda= seq(.001,.1, length=50)
+                                   ),
+                                   trControl=trainControl(
+                                     method= "cv",
+                                     number= 10
+                                   ))
+```
+After the confusion matrix has been ran, the accuracy of the model is .936, the sensitivity is .9125, and the specificity is .9565.
+```{r}
+i_glmnet_all<-confusionMatrix(predict(innovation_glmnet_all_model, test_set_all_innovation, type="raw"),
+                test_set_all_innovation$`Innovation Variable`)
+
+i_glmnet_all
+```
+
+#### Lasso Work Styles Model
+The next model is predicting the innovation variable binomial of the work styles dataset using lasso regression. Like the previous model, the `train()` function from the Caret package was used to create the model, with the method specified as "glmnet" from the glmnet package.
+```{r}
+#Work Styles Data glmnet
+set.seed(1888)
+innovation_glmnet_ws_model<-train(`Innovation Variable` ~ .,
+                                  data= train_set_work_styles_innovation,
+                                  method= "glmnet",
+                                  family= "binomial",
+                                  preProcess= c("center", "scale"),
+                                  tuneGrid= expand.grid(
+                                    alpha=1,
+                                    lambda= seq(.001,.1, length=50)
+                                  ),
+                                  trControl=trainControl(
+                                    method= "cv",
+                                    number= 10
+                                  ))
+```
+After the confusion matrix has been ran, the accuracy of the model is .9302, the sensitivity is .9375, and the specificity is .9239.
+```{r}
+i_glmnet_ws<-confusionMatrix(predict(innovation_glmnet_ws_model, test_set_work_styles_innovation, type="raw"),
+                test_set_work_styles_innovation$`Innovation Variable`)
+
+i_glmnet_ws
+```
+
+#### k-NN All Data Model
+The final model type I looked at was k-nearest Neighbors (k-nn). For each data point, this method calculates the closest data points and takes an average of all of these points to make its prediction. The term 'k' is used to specify the number of close points to be averaged. 
+
+The `train()` function from the Caret package was used to create the model, with the method specified as "knn". Within the model tuning, k is specified as a sequence from 9 to 71 in order to find the optimal number of closest neighbors.
+```{r}
+set.seed(1888)
+innovation_knn_all_model <- train(`Innovation Variable` ~ .,
+                                  data = train_set_all_innovation,
+                                  method = "knn",
+                                  preProcess = c("center", "scale"),
+                                  tuneGrid = data.frame(k = seq(9, 71, 2)),
+                                  trControl = trainControl(
+                                    method = "cv",
+                                    number = 10
+                                  ))
+```
+After the confusion matrix has been ran, the accuracy of the model is .8837, the sensitivity is .925, and the specificity is .8478.
+```{r}
+i_knn_all<-confusionMatrix(predict(innovation_knn_all_model, test_set_all_innovation, type="raw"),
+                test_set_all_innovation$`Innovation Variable`)
+
+i_knn_all
+```
+#### k-NN Work Styles Model
+The next model is predicting the innovation variable binomial of the work styles dataset using k-NN. Like the previous model, the `train()` function from the Caret package was used to create the model, with the method specified as "knn".
+```{r}
+#Work Styles Data knn
+set.seed(1888)
+innovation_knn_ws_model <- train(`Innovation Variable` ~ .,
+                                 data = train_set_work_styles_innovation,
+                                 method = "knn",
+                                 preProcess = c("center", "scale"),
+                                 tuneGrid = data.frame(k = seq(9, 71, 2)),
+                                 trControl = trainControl(
+                                   method = "cv",
+                                   number = 10
+                                 ))
+
+i_knn_ws<-confusionMatrix(predict(innovation_knn_ws_model, test_set_work_styles_innovation, type="raw"),
+                test_set_work_styles_innovation$`Innovation Variable`)
+```
+After the confusion matrix has been ran, the accuracy of the model is .9128, the sensitivity is .9, and the specificity is .9239.
+```{r}
+i_knn_ws<-confusionMatrix(predict(innovation_knn_ws_model, test_set_work_styles_innovation, type="raw"),
+                test_set_work_styles_innovation$`Innovation Variable`)
+
+i_knn_ws
+
+```
+
+### Attention to Detail Models
+According to O * Net, 'attention to detail' is defined as "a tendency to be detailed oriented, organized, and thorough in completing work" (Putka et al., 2024, p. 25). Out of the three selected work styles, 'attention to detail' has the least amount of range of values with the highest score being 3 and the lowest being .74. There are no negative values within the range, meaning that 'attention to detail' is beneficial to  all jobs within the O * Net system to some extent. 'Attention to detail' also has the highest number 3 valued scores, with 125 jobs rating it the highest score on the scale.
+
+Like with the innovation models, the data needed to be divided into training sets and testing sets. The training sets were used to create and train the models, and the test sets were kept as independent holdouts so they could be used as a final test of model performance. To get the same split every time the code is run, the function `set.seed()` was used. The function `createDataPartition()` from the Caret package was used to divide the data into 80% for training, and 20% for testing, labeled 'train_set_all_attention' and 'test_set_all_attention' respectively. 
+```{r}
+###ATTENTION TO DETAIL MODELS###
+#Split Data Into Test and Train Sets
+set.seed(1888)
+
+train_index_attention <- createDataPartition(o_net_data$`Attention to Detail Variable`, p = 0.8, list = FALSE)
+
+train_set_all_attention<-o_net_data[train_index_attention,]
+test_set_all_attention<-o_net_data[-train_index_attention,]
+```
+Similarly to the innovation test/train sets, the ‘Title’ column is not needed and was taken out. I also removed the 'Attention to Detail' column as it's what the predictor 'Attention to Detail Variable' is based on. Similarly, the two columns containing the binomial categorization columns for the other two work style outcomes (‘Innovation Variable' and 'Stress Tolerance Variable') were removed, as it would be redundant with the corresponding 'Innovation' and 'Stress Tolerance' columns. 
+```{r}
+train_set_all_attention<-train_set_all_attention%>%
+  select(c(-Title,-`Attention to Detail`, -`Innovation Variable`, -`Stress Tolerance Variable`))
+test_set_all_attention<-test_set_all_attention%>%
+  select(c(-Title, -`Attention to Detail`, -`Innovation Variable`, -`Stress Tolerance Variable`))
+```
+This constituted the first dataset that contained all variables. To create the second data set of only the work styles data, I took our test and train sets and selected only the columns from the work style dataset using the `select()` function. The altered data sets were labled 'train_set_work_styles_innovation', and 'test_set_work_styles_innovation'. By making the work style dataset this way, both datasets have the same data partition split, and can be better compared.
+```{r}
+train_set_work_styles_attention<-train_set_all_attention%>%
+  select(c(`Achievement Orientation`, `Intellectual Curiosity`, `Tolerance for Ambiguity`, Initiative, Adaptability, `Self-Confidence`, Perseverance, `Leadership Orientation`, Humility, Sincerity, Empathy, Cooperation, Optimism, `Social Orientation`, Cautiousness, `Innovation`, Dependability, Integrity, `Stress Tolerance`, `Self-Control`, `Attention to Detail Variable`))
+test_set_work_styles_attention<-test_set_all_attention%>%
+  select(c(`Achievement Orientation`, `Intellectual Curiosity`, `Tolerance for Ambiguity`, Initiative, Adaptability, `Self-Confidence`, Perseverance, `Leadership Orientation`, Humility, Sincerity, Empathy, Cooperation, Optimism, `Social Orientation`, Cautiousness, `Innovation`, Dependability, Integrity, `Stress Tolerance`, `Self-Control`, `Attention to Detail Variable`))
+```
+Finally, in order for the models to be compatible with the R packages, the 'Innovation Variable' binomial column for all four test/train sets were changed from the 1/0 binomial to having labels of "High" and "Low".
+```{r}
+#All Data glm
+train_set_all_attention <- train_set_all_attention %>%
+  mutate(`Attention to Detail Variable` = factor(`Attention to Detail Variable`, labels = c("High", "Low")))
+test_set_all_attention <- test_set_all_attention %>%
+  mutate(`Attention to Detail Variable` = factor(`Attention to Detail Variable`, labels = c("High", "Low")))
+
+train_set_work_styles_attention <- train_set_work_styles_attention %>%
+  mutate(`Attention to Detail Variable` = factor(`Attention to Detail Variable`, labels = c("High", "Low")))
+test_set_work_styles_attention <- test_set_work_styles_attention %>%
+  mutate(`Attention to Detail Variable` = factor(`Attention to Detail Variable`, labels = c("High", "Low")))
+```
+
+#### GLM All Data Model
+This model is predicting the 'attention to detail' variable binomial of the full dataset using the generalized linear model (glm). The `train()` function from the Caret package was used to create the model, with the method specified as "glm".
+```{r}
+set.seed(1888)
+attention_glm_all_model<-train(`Attention to Detail Variable` ~ .,
+                               data= train_set_all_attention,
+                               method= "glm",
+                               family= "binomial",
+                               preProcess= c("center", "scale"),
+                               trControl=trainControl(
+                                 method= "cv",
+                                 number= 10
+                               ))
+```
+After the confusion matrix has been ran, the accuracy of the model is .7965, the sensitivity is .7857, and the specificity is .8068.
+```{r}
+atd_glm_all<-confusionMatrix(predict(attention_glm_all_model, test_set_all_attention, type="raw"),
+                test_set_all_attention$`Attention to Detail Variable`)
+
+atd_glm_all
+```
+
+#### GLM Work Styles Model
+This model is prediction the 'attention to detail' variable binomial of the work styles dataset using the generalized linear model (glm). Like the previous models `train()` function from the Caret package was used to create the model, with the method specified as "glm".
+```{r}
+#Work Styles Data glm
+set.seed(1888)
+attention_glm_ws_model<-train(`Attention to Detail Variable` ~ .,
+                              data= train_set_work_styles_attention,
+                              method= "glm",
+                              family= "binomial",
+                              preProcess= c("center", "scale"),
+                              trControl=trainControl(
+                                method= "cv",
+                                number= 10
+                              ))
+```
+After the confusion matrix has been ran, the accuracy of the model is .8372, the sensitivity is .7976, and the specificity is .875.
+```{r}
+atd_glm_ws<-confusionMatrix(predict(attention_glm_ws_model, test_set_work_styles_attention, type="raw"),
+                test_set_work_styles_attention$`Attention to Detail Variable`)
+
+atd_glm_ws
+```
+
+#### Lasso All Data Model
+The next model is predicting the 'attention to detail' variable binomial of the full dataset using lasso regression. Like the previous models, the `train()` function from the Caret package was used to create the model, with the method specified as "glmnet" from the glmnet package.
+```{r}
+#All Data glmnet
+set.seed(1888)
+attention_glmnet_all_model<-train(`Attention to Detail Variable` ~ .,
+                                  data= train_set_all_attention,
+                                  method= "glmnet",
+                                  family= "binomial",
+                                  preProcess= c("center", "scale"),
+                                  tuneGrid= expand.grid(
+                                    alpha=1,
+                                    lambda= seq(.001,.1, length=50)
+                                  ),
+                                  trControl=trainControl(
+                                    method= "cv",
+                                    number= 10
+                                  ))
+```
+After the confusion matrix has been ran, the accuracy of the model is .8372, the sensitivity is .7738, and the specificity is .8977.
+```{r}
+atd_glmnet_all<-confusionMatrix(predict(attention_glmnet_all_model, test_set_all_attention, type="raw"),
+                test_set_all_attention$`Attention to Detail Variable`)
+
+atd_glmnet_all
+```
+#### Lasso Work Styles Model
+The next model is predicting the 'attention to detail' variable binomial of the work styles dataset using lasso regression. Like the previous models, the `train()` function from the Caret package was used to create the model, with the method specified as "glmnet" from the glmnet package.
+```{r}
+#Work Styles Data glmnet
+set.seed(1888)
+attention_glmnet_ws_model<-train(`Attention to Detail Variable` ~ .,
+                                 data= train_set_work_styles_attention,
+                                 method= "glmnet",
+                                 family= "binomial",
+                                 preProcess= c("center", "scale"),
+                                 tuneGrid= expand.grid(
+                                   alpha=1,
+                                   lambda= seq(.001,.1, length=50)
+                                 ),
+                                 trControl=trainControl(
+                                   method= "cv",
+                                   number= 10
+                                 ))
+```
+After the confusion matrix has been ran, the accuracy of the model is .8488, the sensitivity is .8333, and the specificity is .8636.
+```{r}
+atd_glmnet_ws<-confusionMatrix(predict(attention_glmnet_ws_model, test_set_work_styles_attention, type="raw"),
+                test_set_work_styles_attention$`Attention to Detail Variable`)
+
+atd_glmnet_ws
+```
+
+#### k-NN All Data Model
+The next model is predicting the 'attention to detail' variable binomial of the full dataset using k-NN. Like the previous models, the `train()` function from the Caret package was used to create the model, with the method specified as "knn".
+```{r}
+#All Data knn
+set.seed(1888)
+attention_knn_all_model <- train(`Attention to Detail Variable` ~ .,
+                                 data = train_set_all_attention,
+                                 method = "knn",
+                                 preProcess = c("center", "scale"),
+                                 tuneGrid = data.frame(k = seq(9, 71, 2)),
+                                 trControl = trainControl(
+                                   method = "cv",
+                                   number = 10
+                                 ))
+```
+After the confusion matrix has been ran, the accuracy of the model is .814, the sensitivity is .7143, and the specificity is .9091.
+```{r}
+atd_knn_all<-confusionMatrix(predict(attention_knn_all_model, test_set_all_attention, type="raw"),
+                test_set_all_attention$`Attention to Detail Variable`)
+
+atd_knn_all
+```
+
+#### k-NN All Data Model
+The final model for this variable is predictin the 'attention to detail' variable binomial of the work styles dataset using k-NN. Like the previous models, the `train()` function from the Caret package was used to create the model, with the method specified as "knn".
+```{r}
+set.seed(1888)
+attention_knn_ws_model <- train(`Attention to Detail Variable` ~ .,
+                                data = train_set_work_styles_attention,
+                                method = "knn",
+                                preProcess = c("center", "scale"),
+                                tuneGrid = data.frame(k = seq(9, 71, 2)),
+                                trControl = trainControl(
+                                  method = "cv",
+                                  number = 10
+                                ))
+```
+After the confusion matrix has been ran, the accuracy of the model is .8256, the sensitivity is .7738, and the specificity is .8750.
+```{r}
+atd_knn_ws<-confusionMatrix(predict(attention_knn_ws_model, test_set_work_styles_attention, type="raw"),
+                test_set_work_styles_attention$`Attention to Detail Variable`)
+
+atd_knn_ws
+```
+
+### Stress Tolerance Models
+According to O * Net, 'stress tolerance' is defined as "a tendency to cope and function effectively in stressful situations at work" (Putka et al., 2024, p. 26). The range for 'stress tolerance' has a lowest score of .15, and highest score of 3. Similarly to 'attention to detail", there are no negative values within the range, meaning that 'stress tolerance' is beneficial to  all jobs within the O * Net system to some extent. That being said, the range of 'stress tolerance' is larger with the scores more evenly spread out. For instance, while 'attention to detail' had 125 scores of 3, 'stress tolerance' has only 19 with the majority of those being in the medical and emergency response fields. 
+
+Like the previous variables, the data needed to be divided into training sets and testing sets. The training sets were used to create and train the models, and the test sets were kept as independent holdouts so they could be used as a final test of model performance. To get the same split every time the code is run, the function `set.seed()` was used. The function `createDataPartition()` from the Caret package was used to divide the data into 80% for training, and 20% for testing, labeled 'train_set_all_stress' and 'test_set_all_stress' respectively. 
+```{r}
+###STRESS TOLERANCE###
+#Split Data Into Test and Train Sets
+set.seed(1888)
+
+train_index_stress <- createDataPartition(o_net_data$`Stress Tolerance`, p = 0.8, list = FALSE)
+
+train_set_all_stress<-o_net_data[train_index_stress,]
+test_set_all_stress<-o_net_data[-train_index_stress,]
+```
+Similarly to the previous variables, the ‘Title’ column is not needed and was taken out. I also removed the 'Stress Tolerance' column as it's what the predictor 'Stress Tolerance Variable' is based on. Similarly, the two columns containing the binomial categorization columns for the other two work style outcomes (‘Innovation Variable' and 'Attention to Detail Variable') were removed, as it would be redundant with the corresponding 'Innovation' and 'Attention to Detail' columns.
+```{r}
+train_set_all_stress<-train_set_all_stress%>%
+  select(c(-Title, -`Stress Tolerance`, -`Innovation Variable`, -`Attention to Detail Variable`))
+test_set_all_stress<-test_set_all_stress%>%
+  select(c(-Title, -`Stress Tolerance`, -`Innovation Variable`, -`Attention to Detail Variable`))
+```
+This constituted the first dataset that contained all variables. To create the second data set of only the work styles data, I took the test and train sets and selected only the columns from the work style dataset using the `select()` function. The altered data sets were labled 'train_set_work_styles_stress', and 'test_set_work_styles_stress'. By making it this way, the two datasets have the same data partition split, and can be better compared. 
+```{r}
+train_set_work_styles_stress<-train_set_all_stress%>%
+  select(c(`Achievement Orientation`, `Intellectual Curiosity`, `Tolerance for Ambiguity`, Initiative, Adaptability, `Self-Confidence`, Perseverance, `Leadership Orientation`, Humility, Sincerity, Empathy, Cooperation, Optimism, `Social Orientation`, Cautiousness, `Innovation`, Dependability, Integrity, `Attention to Detail`, `Self-Control`, `Stress Tolerance Variable`))
+test_set_work_styles_stress<-test_set_all_stress%>%
+  select(c(`Achievement Orientation`, `Intellectual Curiosity`, `Tolerance for Ambiguity`, Initiative, Adaptability, `Self-Confidence`, Perseverance, `Leadership Orientation`, Humility, Sincerity, Empathy, Cooperation, Optimism, `Social Orientation`, Cautiousness, `Innovation`, Dependability, Integrity, `Attention to Detail`, `Self-Control`, `Stress Tolerance Variable`))
+
+```
+Finally, in order for it to run smoothly, the 'Stress Tolerance Variable' binomial for all four test/train sets were changed from the 1/0 binomial to having labels of "High" and "Low".
+```{r}
+train_set_all_stress <- train_set_all_stress %>%
+  mutate(`Stress Tolerance Variable` = factor(`Stress Tolerance Variable`, labels = c("High", "Low")))
+test_set_all_stress <- test_set_all_stress %>%
+  mutate(`Stress Tolerance Variable` = factor(`Stress Tolerance Variable`, labels = c("High", "Low")))
+
+train_set_work_styles_stress <- train_set_work_styles_stress %>%
+  mutate(`Stress Tolerance Variable` = factor(`Stress Tolerance Variable`, labels = c("High", "Low")))
+test_set_work_styles_stress <- test_set_work_styles_stress %>%
+  mutate(`Stress Tolerance Variable` = factor(`Stress Tolerance Variable`, labels = c("High", "Low")))
+```
+
+#### GLM All Data Model
+This model is predicting the 'stress tolerance' variable binomial of the full dataset using the generalized linear model (glm). Like with the previous models, the `train()` function from the Caret package was used to create the model, with the method specified as "glm".
+```{r}
+#All Data glm
+set.seed(1888)
+stress_glm_all_model<-train(`Stress Tolerance Variable` ~ .,
+                            data= train_set_all_stress,
+                            method= "glm",
+                            family= "binomial",
+                            preProcess= c("center", "scale"),
+                            trControl=trainControl(
+                              method= "cv",
+                              number= 10
+                            ))
+```
+After the confusion matrix has been ran, the accuracy of the model is .8471, the sensitivity is .8632, and the specificity is .8267.
+```{r}
+st_glm_all<-confusionMatrix(predict(stress_glm_all_model, test_set_all_stress, type="raw"),
+                test_set_all_stress$`Stress Tolerance Variable`)
+
+st_glm_all
+```
+
+#### GLM Work Styles Data Model
+This model is predicting the 'stress tolerance' variable binomial of the work styles dataset using the generalized linear model (glm). Like with the previous models, the `train()` function from the Caret package was used to create the model, with the method specified as "glm".
+```{r}
+#Work Styles Data glm
+set.seed(1888)
+stress_glm_ws_model<-train(`Stress Tolerance Variable` ~ .,
+                           data= train_set_work_styles_stress,
+                           method= "glm",
+                           family= "binomial",
+                           preProcess= c("center", "scale"),
+                           trControl=trainControl(
+                             method= "cv",
+                             number= 10
+                           ))
+```
+After the confusion matrix has been ran, the accuracy of the model is .8941, the sensitivity is .9158, and the specificity is .8667.
+```{r}
+st_glm_ws<-confusionMatrix(predict(stress_glm_ws_model, test_set_work_styles_stress, type="raw"),
+                test_set_work_styles_stress$`Stress Tolerance Variable`)
+
+st_glm_ws
+```
+
+#### Lasso All Data Model
+The next model is predicting the 'stress tolerance' variable binomial of the full dataset using lasso regression. Like the previous models, the `train()` function from the Caret package was used to create the model, with the method specified as "glmnet" from the glmnet package.
+```{r}
+#All Data glmnet
+set.seed(1888)
+stress_glmnet_all_model<-train(`Stress Tolerance Variable` ~ .,
+                               data= train_set_all_stress,
+                               method= "glmnet",
+                               family= "binomial",
+                               preProcess= c("center", "scale"),
+                               tuneGrid= expand.grid(
+                                 alpha=1,
+                                 lambda= seq(.001,.1, length=50)
+                               ),
+                               trControl=trainControl(
+                                 method= "cv",
+                                 number= 10
+                               ))
+```
+After the confusion matrix has been ran, the accuracy of the model is .8765, the sensitivity is .9053, and the specificity is .84.
+```{r}
+st_glmnet_all<-confusionMatrix(predict(stress_glmnet_all_model, test_set_all_stress, type="raw"),
+                test_set_all_stress$`Stress Tolerance Variable`)
+
+st_glmnet_all
+```
+
+#### Lasso Work Styles Data Model
+The next model is predicting the 'stress tolerance' variable binomial of the work styles dataset using lasso regression. Like the previous models, the `train()` function from the Caret package was used to create the model, with the method specified as "glmnet" from the glmnet package.
+```{r}
+#Work Styles Data glmnet
+set.seed(1888)
+stress_glmnet_ws_model<-train(`Stress Tolerance Variable` ~ .,
+                              data= train_set_work_styles_stress,
+                              method= "glmnet",
+                              family= "binomial",
+                              preProcess= c("center", "scale"),
+                              tuneGrid= expand.grid(
+                                alpha=1,
+                                lambda= seq(.001,.1, length=50)
+                              ),
+                              trControl=trainControl(
+                                method= "cv",
+                                number= 10
+                              ))
+```
+After the confusion matrix has been ran, the accuracy of the model is .8824, the sensitivity is .9158, and the specificity is .84.
+```{r}
+st_glmnet_ws<-confusionMatrix(predict(stress_glmnet_ws_model, test_set_work_styles_stress, type="raw"),
+                test_set_work_styles_stress$`Stress Tolerance Variable`)
+
+st_glmnet_ws
+```
+
+#### k-NN All Data Model
+This model is predicting the 'stress tolerance' variable binomial of the full dataset using k-nearest neighbors (k-NN). Like with the previous models, the `train()` function from the Caret package was used to create the model, with the method specified as "knn".
+```{r}
+#All Data knn
+set.seed(1888)
+stress_knn_all_model <- train(`Stress Tolerance Variable` ~ .,
+                              data = train_set_all_stress,
+                              method = "knn",
+                              preProcess = c("center", "scale"),
+                              tuneGrid = data.frame(k = seq(9, 71, 2)),
+                              trControl = trainControl(
+                                method = "cv",
+                                number = 10
+                              ))
+```
+After the confusion matrix has been ran, the accuracy of the model is .8353, the sensitivity is .9053, and the specificity is .7467.
+```{r}
+st_knn_all<-confusionMatrix(predict(stress_knn_all_model, test_set_all_stress, type="raw"),
+                test_set_all_stress$`Stress Tolerance Variable`)
+
+st_knn_all
+```
+
+#### k-NN Work Styles Data Model
+This model is predicting the 'stress tolerance' variable binomial of the full dataset using the k-nearest neighbors (k-NN). Like with the previous models, the `train()` function from the Caret package was used to create the model, with the method specified as "knn".
+```{r}
+#Work Styles Data knn
+set.seed(1888)
+stress_knn_ws_model <- train(`Stress Tolerance Variable` ~ .,
+                             data = train_set_work_styles_stress,
+                             method = "knn",
+                             preProcess = c("center", "scale"),
+                             tuneGrid = data.frame(k = seq(9, 71, 2)),
+                             trControl = trainControl(
+                               method = "cv",
+                               number = 10
+                             ))
+```
+After the confusion matrix has been ran, the accuracy of the model is .8706, the sensitivity is .9158, and the specificity is .8133.
+```{r}
+st_knn_ws<-confusionMatrix(predict(stress_knn_ws_model, test_set_work_styles_stress, type="raw"),
+                test_set_work_styles_stress$`Stress Tolerance Variable`)
+
+st_knn_ws
+```
+
+# Additional Results
+In general, all of the models did a fairly good job at prediction. The range of accuracy is from .8 to .94, which for a low risk subject like predicting work styles is adequate. To help illustrate this range, I made a heatmap showing the scores for accuracy, sensitivity, and specificity. In order to create the figure, I started by making one data frame titled `confusion_matrix_values' that contained the accuracy, sensitivity, and specificity scores from the confusion matrices for every model. I also added columns delineating work style outcomes, model types, and what dataset was used. 
+```{r}
+###DATA VIS 
+#formatting
+confusion_matrix_values <- rbind(
+  data.frame(Model = "Innovation GLM All Data",
+             Accuracy = i_glm_all$overall["Accuracy"],
+             Sensitivity = i_glm_all$byClass["Sensitivity"],
+             Specificity = i_glm_all$byClass["Specificity"]),
+  data.frame(Model = "Innovation GLM Work Styles",
+             Accuracy = i_glm_ws$overall["Accuracy"],
+             Sensitivity = i_glm_ws$byClass["Sensitivity"],
+             Specificity = i_glm_ws$byClass["Specificity"]),
+  data.frame(Model = "Innovation GLMnet All Data",
+             Accuracy = i_glmnet_all$overall["Accuracy"],
+             Sensitivity = i_glmnet_all$byClass["Sensitivity"],
+             Specificity = i_glmnet_all$byClass["Specificity"]),
+  data.frame(Model = "Innovation GLMnet Work Styles",
+             Accuracy = i_glmnet_ws$overall["Accuracy"],
+             Sensitivity = i_glmnet_ws$byClass["Sensitivity"],
+             Specificity = i_glmnet_ws$byClass["Specificity"]),
+  data.frame(Model = "Innovation KNN All Data",
+             Accuracy = i_knn_all$overall["Accuracy"],
+             Sensitivity = i_knn_all$byClass["Sensitivity"],
+             Specificity = i_knn_all$byClass["Specificity"]),
+  data.frame(Model = "Innovation KNN Work Styles",
+             Accuracy = i_knn_ws$overall["Accuracy"],
+             Sensitivity = i_knn_ws$byClass["Sensitivity"],
+             Specificity = i_knn_ws$byClass["Specificity"]),
+             
+  data.frame(Model = "Attention to Detail GLM All Data",
+             Accuracy = atd_glm_all$overall["Accuracy"],
+             Sensitivity = atd_glm_all$byClass["Sensitivity"],
+             Specificity = atd_glm_all$byClass["Specificity"]),
+  data.frame(Model = "Attention to Detail GLM Work Styles",
+             Accuracy = atd_glm_ws$overall["Accuracy"],
+             Sensitivity = atd_glm_ws$byClass["Sensitivity"],
+             Specificity = atd_glm_ws$byClass["Specificity"]),
+  data.frame(Model = "Attention to Detail GLMnet All Data",
+             Accuracy = atd_glmnet_all$overall["Accuracy"],
+             Sensitivity = atd_glmnet_all$byClass["Sensitivity"],
+             Specificity = atd_glmnet_all$byClass["Specificity"]),
+  data.frame(Model = "Attention to Detail GLMnet Work Styles",
+             Accuracy = atd_glmnet_ws$overall["Accuracy"],
+             Sensitivity = atd_glmnet_ws$byClass["Sensitivity"],
+             Specificity = atd_glmnet_ws$byClass["Specificity"]),
+  data.frame(Model = "Attention to Detail KNN All Data",
+             Accuracy = atd_knn_all$overall["Accuracy"],
+             Sensitivity = atd_knn_all$byClass["Sensitivity"],
+             Specificity = atd_knn_all$byClass["Specificity"]),
+  data.frame(Model = "Attention to Detail KNN Work Styles",
+             Accuracy = atd_knn_ws$overall["Accuracy"],
+             Sensitivity = atd_knn_ws$byClass["Sensitivity"],
+             Specificity = atd_knn_ws$byClass["Specificity"]),
+  
+  data.frame(Model = "Stress Tolerance GLM All Data",
+             Accuracy = st_glm_all$overall["Accuracy"],
+             Sensitivity = st_glm_all$byClass["Sensitivity"],
+             Specificity = st_glm_all$byClass["Specificity"]),
+  data.frame(Model = "Stress Tolerance GLM Work Styles",
+             Accuracy = st_glm_ws$overall["Accuracy"],
+             Sensitivity = st_glm_ws$byClass["Sensitivity"],
+             Specificity = st_glm_ws$byClass["Specificity"]),
+  data.frame(Model = "Stress Tolerance GLMnet All Data",
+             Accuracy = st_glmnet_all$overall["Accuracy"],
+             Sensitivity = st_glmnet_all$byClass["Sensitivity"],
+             Specificity = st_glmnet_all$byClass["Specificity"]),
+  data.frame(Model = "Stress Tolerance GLMnet Work Styles",
+             Accuracy = st_glmnet_ws$overall["Accuracy"],
+             Sensitivity = st_glmnet_ws$byClass["Sensitivity"],
+             Specificity = st_glmnet_ws$byClass["Specificity"]),
+  data.frame(Model = "Stress Tolerance KNN All Data",
+             Accuracy = st_knn_all$overall["Accuracy"],
+             Sensitivity = st_knn_all$byClass["Sensitivity"],
+             Specificity = st_knn_all$byClass["Specificity"]),
+  data.frame(Model = "Stress Tolerance KNN Work Styles",
+             Accuracy = st_knn_ws$overall["Accuracy"],
+             Sensitivity = st_knn_ws$byClass["Sensitivity"],
+             Specificity = st_knn_ws$byClass["Specificity"])
+  )
+
+rownames(confusion_matrix_values) <- confusion_matrix_values[,1]
+
+confusion_matrix_values[,1]<-NULL
+
+confusion_matrix_values<-confusion_matrix_values%>%
+  mutate(`Work Style Element` = c("Innovation", "Innovation", "Innovation", "Innovation", "Innovation", "Innovation", "Attention to Detail", "Attention to Detail", "Attention to Detail", "Attention to Detail", "Attention to Detail", "Attention to Detail", "Stress Tolerance", "Stress Tolerance", "Stress Tolerance", "Stress Tolerance", "Stress Tolerance", "Stress Tolerance"))%>%
+  mutate(`Model Type` = c("GLM", "GLM", "Lasso", "Lasso", "kNN", "kNN", "GLM", "GLM", "Lasso", "Lasso", "kNN", "kNN", "GLM", "GLM", "Lasso", "Lasso", "kNN", "kNN"))%>%
+  mutate(`Data Set` = c("All Data", "Work Styles", "All Data", "Work Styles","All Data", "Work Styles","All Data", "Work Styles","All Data", "Work Styles","All Data", "Work Styles","All Data", "Work Styles","All Data", "Work Styles","All Data", "Work Styles"))
+
+confusion_matrix_values<-confusion_matrix_values%>%
+  mutate(Labels = c("Innovation Regression All Data", "Innovation Regression Work Styles", "Innovation Lasso All Data", "Innovation Lasso Work Styles", "Innovation KNN All Data", "Innovation KNN Work Styles", "Attention to Detail Regression All Data", "Attention to Detail Regression Work Styles", "Attention to Detail Lasso All Data", "Attention to Detail Lasso Work Styles", "Attention to Detail KNN All Data", "Attention to Detail KNN Work Styles", "Stress Tolerance Regression All Data", "Stress Tolerance Regression Work Styles", "Stress Tolerance Lasso All Data", "Stress Tolerance Lasso Work Styles", "Stress Tolerance KNN All Data", "Stress Tolerance KNN Work Styles"))
+
+```
+To render the heatmap, here is the code.
+```{r}
+#heatmap
+confusion_matrix_values %>%
+  select(Labels, Accuracy, Sensitivity, Specificity) %>%
+  pivot_longer(-Labels, names_to = "Metric", values_to = "Value") %>%
+  mutate(Labels = factor(Labels, levels = rev(unique(Labels))),
+         Metric = factor(Metric, levels = c("Accuracy", "Sensitivity", "Specificity"))) %>%
+  ggplot(aes(x = Metric, y = Labels, fill = Value)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = round(Value, 2)), size = 3) +
+  scale_fill_viridis_c(direction= -1) +
+  labs(x = NULL, y = NULL) +
+  theme_minimal()
+```
+
+There were some interesting findings that emerged from looking at the differences between the three work style variables. In general, the innovation models had the highest accuracy, the 'stress tolerance' were second best, and 'attention to detail' had the lowest results. This is best illustrated with this parallel coordinates chart. For the most part, the different work style variables are in pretty clear bands for accuracy and sensitivity, with specificity being more mixed. 
+```{r}
+#Parallel Coordinates Graph Work Style Element
+onet_pallet<-c("#f97316", "#44aa99", "#aa3377")
+
+ggparcoord(confusion_matrix_values,
+           columns = 1:3, groupColumn = 4, 
+           scale="globalminmax",
+           showPoints= TRUE) +
+  scale_color_manual(values= onet_pallet) +
+  geom_text_repel(data=confusion_matrix_values,
+            aes(x=1, y = Accuracy, label= Labels),
+            hjust= 1.2, size=2, inherit.aes=FALSE,
+            max.overlaps= Inf,
+            segment.size=.2,
+            direction= "y") +
+  scale_x_discrete(expand= expansion(mult= c(.45, .075))) +
+  coord_cartesian(clip= "off")
+```
+
+Insight into what dataset produced better outcomes is more nuanced as there is no clear distinction without accounting for model type. To illustrate this, parallel coordinates charts highlighting the different datasets is more mixed with no clear patterns on which runs better. 
+```{r}
+#Parallel Coordinates Graph Data Set Differences
+ggparcoord(confusion_matrix_values,
+           columns = 1:3, groupColumn = 6, 
+           scale="globalminmax",
+           showPoints= TRUE) +
+  scale_color_manual(values= onet_pallet) +
+  geom_text_repel(data=confusion_matrix_values,
+                  aes(x=1, y = Accuracy, label= Labels),
+                  hjust= 1.2, size=2, inherit.aes=FALSE,
+                  max.overlaps= Inf,
+                  segment.size=.2,
+                  direction= "y") +
+  scale_x_discrete(expand= expansion(mult= c(.45, .075))) +
+  coord_cartesian(clip= "off")
+```
+
+To get a better look at what is happening, I isolated each of the work style outcome models into separate parallel coordinate graphs, starting with the innovation models. This was helpful since there was a general order on which work style outcomes did best. 
+```{r}
+#Parallel Coordinates Graph Model Type for only innovation models
+innovation_graph <- confusion_matrix_values %>%
+  filter(`Work Style Element` == "Innovation")
+
+innovation_graph%>%
+  ggparcoord(innovation_graph,
+           columns = 1:3, groupColumn = 5,
+           scale = "globalminmax",
+           showPoints = TRUE) +
+  scale_color_manual(values = onet_pallet) +
+  geom_text_repel(data = innovation_graph,
+                  aes(x = 1, y = Accuracy, label = Labels),
+                  hjust = 1.2, size = 2, inherit.aes = FALSE,
+                  max.overlaps = Inf,
+                  segment.size = 0.2,
+                  direction = "y") +
+  scale_x_discrete(expand = expansion(mult = c(0.45, 0.075))) +
+  coord_cartesian(clip = "off")
+```
+
+Looking at the innovation models graph, a few insights can be noted. The top three best functioning models for overall accuracy were the regression-work styles model, the lasso-all data model, and lasso-work styles model. In general while looking at overall accuracy, the models using only the work styles data set did better than the all data models with the exception of the lasso-all data model. This could be because lasso regression is regularized method, and data that was not relevant in the larger dataset would be filtered out. 
+K-Nearest Neighbors models had the most variance across all metrics. Both k-NN models were in the bottom three models, along with the regression-all data model. 
+Finally, the model with the least amount of variance across all metrics was the lasso-work styles model, which can be seen as the straightest line across the metrics in the graph. This means that there is less trade off between sensitivity and specificity, and makes for an overall solid model. 
+
+The 'attention to detail' models produced similar patterns, though with some variation. The top three models for overall accuracy were the same, though in a slightly different order with the lasso-work styles model as the best model. The bottom three were also the same, but in a different order, with regression-all model data as the lowest. The lasso-work styles model similarly had decently low variance across metrics. 
+```{r}
+#Parallel Coordinates Graph Model Type for only attention to detail models
+attention_graph <- confusion_matrix_values %>%
+  filter(`Work Style Element` == "Attention to Detail")
+
+attention_graph%>%
+  ggparcoord(attention_graph,
+             columns = 1:3, groupColumn = 5,
+             scale = "globalminmax",
+             showPoints = TRUE) +
+  scale_color_manual(values = onet_pallet) +
+  geom_text_repel(data = attention_graph,
+                  aes(x = 1, y = Accuracy, label = Labels),
+                  hjust = 1.2, size = 2, inherit.aes = FALSE,
+                  max.overlaps = Inf,
+                  segment.size = 0.2,
+                  direction = "y") +
+  scale_x_discrete(expand = expansion(mult = c(0.45, 0.075))) +
+  coord_cartesian(clip = "off")
+```
+
+The 'stress tolerance' models also had similar patterns as well. Both the top three models and the bottom three for overall accuracy were the same as the previous work style outcomes but in slightly different orders. Unlike the previous two work style outcomes, the lasso-work style model had a greater amount of variance across metrics, though still within a decently close range (.84 to .92). 
+```{r}
+#Parallel Coordinates Graph Model Type for only stress tolerance models
+stress_graph <- confusion_matrix_values %>%
+  filter(`Work Style Element` == "Stress Tolerance")
+
+stress_graph%>%
+  ggparcoord(stress_graph,
+             columns = 1:3, groupColumn = 5,
+             scale = "globalminmax",
+             showPoints = TRUE) +
+  scale_color_manual(values = onet_pallet) +
+  geom_text_repel(data = stress_graph,
+                  aes(x = 1, y = Accuracy, label = Labels),
+                  hjust = 1.2, size = 2, inherit.aes = FALSE,
+                  max.overlaps = Inf,
+                  segment.size = 0.2,
+                  direction = "y") +
+  scale_x_discrete(expand = expansion(mult = c(0.45, 0.075))) +
+  coord_cartesian(clip = "off")
+```
+
+# Conclusion
+### Summary
+Overall, all 18 models had adequate prediction performance. Generally within these models, innovation models had the best accuracy between the three work style outcomes. The top three performing model/dataset combinations for overall accuracy were the lasso-work styles, regression-work styles, and lasso-all data models. The bottom three performing model/dataset combinations for overall accuracy were the regression-all data, knn-all data, and knn-work style models. 
+
+### Potential Impact
+The O * NET research is an important part of the data that the United States Department of Labor provides. The more that we understand about what features create success in a job, the better we can make hiring, work environments, and overall job happiness. Projects like this can contribute to our scientific understanding of the work force, which is valuable in and of itself. From there, organizations can use that knowledge to help make better decisions. For example, knowing what predicts a work style variable can help us design better work environments and fit people into the optimal environment for them. For instance, if a job is predicted to need high stress tolerance, the environment can be designed to help workers cope with job stress.   
+
+### Limitations
+This project does have several limitations. The comparison across the three work style outcomes is not perfect because each outcome required a separate training/testing split. The `createDataPartition()` function automatically creates the split based on the distribution of feature it is told to split by. Using a single split based on one work style outcome would be imbalanced when looking at the other work style outcomes, so I chose to do three separate splits. It is also not ideal to use such a large dataset as the all data dataset without using regularization, but I was interested in exploring how using an un-regularized model (linear regression) would effect model performance. Finally, it would be ideal to use a larger sample size, though I did still get good results using the smaller sample size. 
+
+### Future Work
+This project could be expanded upon in the future. It would be interesting to try out other kinds of models, such as random forest or natural language processing methods. Also, a future project could repeat this process for all 21 work style traits instead of only 3. Another future direction would be to isolate what specific variables are most valuable for prediction for each of these variables. 
+
+# References
+
+National Center for O * NET Development. (2026). The O * NET Overview. O*NET Resource Center. https://www.onetcenter.org/overview.html
+
+National Center for O * NET Development. (2026). O * NET 30.2 Database. O*NET Resource Center. https://www.onetcenter.org/dictionary/30.2/excel/
+
+Putka, D. J., Kell, H. J., Voss, N. M., Oswald, F., & Lewis, P. (2024). Revisiting the work styles domain of the O * NET content model. National Center for O*NET Development. https://www.onetcenter.org/reports/Work_Styles_New.html 
